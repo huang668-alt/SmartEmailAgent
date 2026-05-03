@@ -11,6 +11,7 @@ from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 
 class EmailAccessAndSynchronizationModule:
+
     def __init__(self):
         self.service = None
         self.last_sync_time = None
