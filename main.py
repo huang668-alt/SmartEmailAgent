@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 def main():
     try:
-        print()
+
     except Exception as e:
         logger.error(f"系统运行失败: {e}")
         traceback.print_exc()

@@ -129,8 +129,10 @@ class EmailAccessAndSynchronizationModule:
     def extract_attachments(self, message_id, part):
         """保存并提取附件文本"""
 
-        filename = part.get("filename")
-        if not filename:
+        original_filename = part.get("filename")
+        safe_filename = original_filename.replace('/', '_').replace('\\', '_')
+        save_filename = f"{message_id}_{safe_filename}"
+        if not original_filename:
             return None
         body = part.get("body", {})
         attachment_id = body.get("attachmentId")
@@ -144,7 +146,7 @@ class EmailAccessAndSynchronizationModule:
                 ).execute()
                 data_b64 = attachment.get("data")
             except Exception as e:
-                logging.error(f"下载附件 {filename} 失败: {e}")
+                logging.error(f"下载附件 {save_filename} 失败: {e}")
                 return None
 
         if not data_b64:
@@ -153,10 +155,10 @@ class EmailAccessAndSynchronizationModule:
         save_dir = "attachments"
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
-        filepath = os.path.join(save_dir, filename)
+        filepath = os.path.join(save_dir, save_filename)
         with open(filepath, 'wb') as f:
             f.write(file_data)
-        if filename.lower().endswith(('.txt', '.md', '.csv', '.json')):
+        if original_filename.lower().endswith(('.txt', '.md', '.csv', '.json')):
             try:
                 extracted_text = file_data.decode('utf-8')
             except UnicodeDecodeError:
@@ -164,7 +166,8 @@ class EmailAccessAndSynchronizationModule:
         else:
             extracted_text = f"[非纯文本附件，保存在: {filepath}]"
         return {
-            "filename": filename,
+            "filename": original_filename,
+            "save_filename": save_filename,
             "filepath": filepath,
             "text": extracted_text
         }
