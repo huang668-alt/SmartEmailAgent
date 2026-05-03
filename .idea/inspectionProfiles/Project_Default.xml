@@ -1,0 +1,23 @@
+<component name="InspectionProjectProfileManager">
+  <profile version="1.0">
+    <option name="myName" value="Project Default" />
+    <inspection_tool class="PyPackageRequirementsInspection" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredPackages">
+        <list>
+          <option value="langchain" />
+          <option value="langchain-huggingface" />
+          <option value="langchain-text-splitters" />
+          <option value="langchain-unstructured" />
+          <option value="langchain-community" />
+          <option value="faiss-cpu" />
+          <option value="unstructured" />
+          <option value="Markdown" />
+          <option value="sentence-transformers" />
+          <option value="lazy_loader" />
+          <option value="rank_bm25" />
+          <option value="openai" />
+        </list>
+      </option>
+    </inspection_tool>
+  </profile>
+</component>
