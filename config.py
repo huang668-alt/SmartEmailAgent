@@ -12,6 +12,8 @@ class SmartEmailAgentConfig:
     summarizer_agent_module_base_url: str = ""
     summarizer_agent_module_api_key: str = ""
 
+    number_of_common_contacts: int = 5
+
     top_k: int = 5
 
     temperature: float = 0.1

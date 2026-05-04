@@ -171,3 +171,25 @@ class EmailAccessAndSynchronizationModule:
             "filepath": filepath,
             "text": extracted_text
         }
+
+    def fetch_new_emails_sent(self, max_results):
+        if self.last_sync_time is None:
+            query = "is:sent"
+        else:
+            last_date = datetime.datetime.fromtimestamp(self.last_sync_time)
+            safe_date = last_date - datetime.timedelta(days=1)
+            after_str = safe_date.strftime("%Y/%m/%d")
+            query = f"is:sent after:{after_str}"
+
+        try:
+            results = self.service.users().messages().list(
+                userId='me',
+                maxResults=max_results,
+                q=query
+            ).execute()
+            messages = results.get('messages', [])
+            self.last_sync_time = time.time()
+            return messages
+        except Exception as e:
+            logging.error(f"拉取邮件失败: {e}")
+            return []

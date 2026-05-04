@@ -1,7 +1,5 @@
-import logging
 import os
 
-from rag_modules import EmailAccessAndSynchronizationModule
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
@@ -195,7 +193,7 @@ class AiAnalysisCoreModule:
         })
         return response
 
-    def classifier_agent(self, parsed_data: dict) -> dict:
+    def classifier_agent(self, parsed_data: dict) -> str:
         """分类邮件并判断紧急程度"""
 
         system_prompt = """你是一个专业的智能邮件分拣助手。你的核心任务是阅读用户的电子邮件，并评估该邮件的“紧急程度（Priority）”，同时简要说明判断理由。
@@ -250,7 +248,7 @@ class AiAnalysisCoreModule:
         response = _summarizer_agent_invoke(chain, parsed_data, None, post)
         return response
 
-    def task_extractor_agent(self, parsed_data: dict) -> dict:
+    def task_extractor_agent(self, parsed_data: dict) -> str:
         """提取待办事项、截止日期、负责人、会议信息"""
 
         system_prompt = """你是一个专业的邮件信息提取助手。你的核心任务是从邮件内容中精准提取出“待办事项（Action Items）”和“会议安排（Meetings）”。
@@ -308,4 +306,50 @@ class AiAnalysisCoreModule:
         chain = prompt | self.model | self.output_parser
         post = "提取待办事项、截止日期、负责人、会议信息"
         response = _summarizer_agent_invoke(chain, parsed_data, None, post)
+        return response
+
+    def context_summary_agent(self, context: str) -> str:
+        """
+        提炼并压缩上下文，生成适合存储为向量记忆的简化版结构化文本
+        """
+        system_prompt = """你是一个专门负责“记忆压缩与知识图谱构建”的 AI 助手。你的核心任务是将用户提供的冗长、杂乱的沟通记录、项目背景或联系人偏好，提炼成高度浓缩、结构化的“核心上下文（Context）”，以便将其作为 AI 的长期记忆存储。
+
+        # 压缩与提炼规则 (COMPRESSION RULES)
+        1. 极简主义：剔除所有问候语、客套话、邮件签名、语气词及冗余的解释。只保留“干货”。
+        2. 聚焦实体与事实：重点提取并保留以下关键信息：
+           - 人物与角色（Who）：谁负责什么，谁是决策者，谁的邮箱是什么。
+           - 项目与代号（What）：项目名称、阶段、预算、核心目标。
+           - 时间与节点（When）：关键的 Deadline、里程碑。
+           - 偏好与规则（Rules）：特定的沟通习惯、禁忌、格式要求。
+        3. 保持客观绝对：将代词（如“他/她”、“我”）替换为具体的实体名称，确保该文本在脱离原语境后依然能被准确理解。
+        4. 绝不捏造：只能基于提供的文本进行总结，不得脑补或推测。
+
+        # 输出格式要求 (OUTPUT FORMAT)
+        请直接输出纯文本（支持适当的换行和无序列表 -），不要输出多余的解释。格式应尽可能紧凑，例如：
+        - 项目[代号/名称]：[状态/截止日期]，负责人：[姓名/邮箱]
+        - 偏好设定：[偏好细节]
+        - 关键规则：[规则细节]
+        """
+
+        user_prompt = """请对以下原始文本进行“记忆压缩”：
+
+        <raw_context>
+        {context}
+        </raw_context>
+
+        请输出提炼后的简化版本：
+        """
+
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", system_prompt),
+            ("user", user_prompt)
+        ])
+
+        self.model.temperature = 0.1
+        chain = prompt | self.model | self.output_parser
+
+        response = chain.invoke({
+            "context": context
+        })
+
         return response
