@@ -4,7 +4,6 @@ from pymilvus import MilvusClient
 
 from config import SmartEmailAgentConfig
 
-
 class MilvusConnectionModule:
 
     def __init__(self):

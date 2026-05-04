@@ -17,6 +17,12 @@ class SmartEmailAgentConfig:
     temperature: float = 0.1
     max_tokens: int = 2048
 
+    embeddings_model_name: str = ""
+    embeddings_url: str = ""
+    embeddings_dimension: int = 512
+    embeddings_api_key: str = ""
+
+
     def __post_init__(self):
         """初始化后的处理（预留）"""
 

@@ -10,7 +10,7 @@ from pydantic import SecretStr
 from config import SmartEmailAgentConfig
 
 
-def _summarizer_agent_invoke(chain, parsed_data, attachments_str):
+def _summarizer_agent_invoke(chain, parsed_data, attachments_str, post):
 
     if attachments_str:
         attachments_summary = _summarizer_agent_attachments(attachments_str)
@@ -20,7 +20,7 @@ def _summarizer_agent_invoke(chain, parsed_data, attachments_str):
             "subject": parsed_data["subject"],
             "body": parsed_data["body"],
             "attachments": attachments_summary,
-            "user_instruction": "请用50字以内总结这封邮件的核心意图，并提取 Action Items。"
+            "user_instruction": post
         })
         return response
     else:
@@ -30,10 +30,9 @@ def _summarizer_agent_invoke(chain, parsed_data, attachments_str):
             "subject": parsed_data["subject"],
             "body": parsed_data["body"],
             "attachments": attachments_str,
-            "user_instruction": "请用50字以内总结这封邮件的核心意图，并提取 Action Items。"
+            "user_instruction": post
         })
         return response
-
 
 def _summarizer_agent_attachments(attachments_str):
     attachment_list = attachments_str.split(",")
@@ -64,18 +63,20 @@ def _summarizer_agent_attachments(attachments_str):
 class AiAnalysisCoreModule:
 
     def __init__(self):
-        self.category = None
-        self.priority = None
-        self.reason = None
+        self.model = ChatOpenAI(
+            model=SmartEmailAgentConfig.summarizer_agent_module_name,
+            temperature=SmartEmailAgentConfig.temperature,
+            base_url=SmartEmailAgentConfig.summarizer_agent_module_base_url,
+            api_key=SecretStr(SmartEmailAgentConfig.summarizer_agent_module_api_key),
+        )
+        self.email_access_and_synchronization_module = None
+        self.output_parser = StrOutputParser()
 
     def orchestrator_agent(self):
         """协调Agent决定执行流程"""
         pass
 
-
-
-    @staticmethod
-    def summarizer_agent():
+    def summarizer_agent(self, parsed_data: dict) -> str:
         """生成邮件摘要（3-5句）"""
 
         system_prompt = """你是一个名为 SmartEmailAgent 的高级人工智能邮件助手。你的核心目标是帮助用户高效、准确地处理、总结、分析和起草电子邮件。
@@ -99,7 +100,6 @@ class AiAnalysisCoreModule:
             
             # 输出要求 (OUTPUT FORMAT)
             请始终保持输出结构清晰、排版易读。当需要列举多个待办事项或要点时，请使用项目符号（Bullet points）。如果系统要求你输出特定格式（如 JSON），你必须严格遵守该格式，绝对不要输出任何多余的解释性文字。"""
-
         user_prompt = """请根据以下提供的邮件详细信息，完成我指定的任务。
 
             <email_metadata>
@@ -122,56 +122,190 @@ class AiAnalysisCoreModule:
             
             请确保你的回答严格遵循系统提示词中的所有准则。
             """
-
-        model = ChatOpenAI(
-            model=SmartEmailAgentConfig.summarizer_agent_module_name,
-            temperature=SmartEmailAgentConfig.temperature,
-            base_url=SmartEmailAgentConfig.summarizer_agent_module_base_url,
-            api_key=SecretStr(SmartEmailAgentConfig.summarizer_agent_module_api_key),
-        )
-        email_access_and_synchronization_module = EmailAccessAndSynchronizationModule()
-        try:
-            email_access_and_synchronization_module.authenticate()
-        except Exception as e:
-            logging.error(f"授权失败: {e}")
-            return []
-
-        max_emails = 5
-        messages = email_access_and_synchronization_module.fetch_new_emails(max_results=max_emails)
-        all_summaries = []
         prompt = ChatPromptTemplate.from_messages([
             ("system", system_prompt),
             ("user", user_prompt)
         ])
-        output_parser = StrOutputParser()
-        chain = prompt | model | output_parser
-        for index, msg in enumerate(messages, start=1):
-            msg_id = msg['id']
-            parsed_data = email_access_and_synchronization_module.parse_email(msg_id)
-            summary = {
-                'id': msg_id,
-                'summary' : None
-            }
+        self.model.temperature = 0.1
+        chain = prompt | self.model | self.output_parser
+        attachments_list = parsed_data.get("attachments", [])
+        if attachments_list:
+            names_list = [att.get("save_filename", "未知文件") for att in attachments_list]
+            attachments_str = ", ".join(names_list)
+        else:
+            attachments_str = "无"
+        post = "请用50字以内总结这封邮件的核心意图，并提取 Action Items。"
+        response = _summarizer_agent_invoke(chain, parsed_data, attachments_str, post)
+        return response
 
-            attachments_list = parsed_data.get("attachments", [])
-            if attachments_list:
-                names_list = [att.get("save_filename", "未知文件") for att in attachments_list]
-                attachments_str = ", ".join(names_list)
-            else:
-                attachments_str = "无"
-            response = _summarizer_agent_invoke(chain, parsed_data, attachments_str)
-            summary['summary'] = response
-            all_summaries.append(summary)
-        return all_summaries
-
-    def reply_agent(self):
+    def reply_agent(self, require, parsed_data: dict)  -> str:
         """生成回复草稿（支持指定语气、长度、语言）"""
-        pass
+        system_prompt = """你是一个高情商且专业的邮件起草助手。你的任务是根据用户提供的“原始邮件内容”以及“回复指令”，撰写一封得体、准确的回信。
 
-    def task_extractor_agent(self):
+               # 起草要求 (DRAFTING REQUIREMENTS)
+               1. 严格遵循指令：你必须完全按照用户指定的【回复意图】、【语气】、【长度】和【语言】进行撰写。
+               2. 上下文连贯：准确识别原始邮件中的发件人姓名，并在回信中使用得体的称呼。结合原邮件内容，确保回复逻辑自洽、不生硬。
+               3. 格式规范：邮件正文必须包含恰当的问候语（如：您好）、核心正文、礼貌的结尾（如：祝好）以及签名占位符（如：[您的名字]）。
+               4. 绝不捏造：不要在邮件中编造用户未提供的虚假事实、日期、金额或承诺。如果缺少关键信息，可以使用占位符（如：[请确认具体时间]）提醒用户补全。
+
+               # 输出要求 (OUTPUT FORMAT)
+               你必须且只能输出合法的 JSON 格式。不要包含任何 Markdown 标记（如 ```json ），也不要包含任何额外的解释性文字。
+
+               期望的 JSON 结构如下：
+               {
+                   "subject": "Re: [原始邮件的主题] 或 [你优化的新主题]",
+                   "body": "这里是完整的邮件正文内容。支持使用换行符 \\n 来保持段落排版。"
+               }
+               """
+
+        user_prompt = """请根据以下信息起草回信：
+
+               【原始邮件信息】
+               发件人: {sender}
+               时间: {date}
+               主题: {subject}
+               正文: {body}
+
+               【起草指令】
+               - 回复意图/内容: {user_instruction}
+               - 语气 (Tone): {tone}
+               - 长度 (Length): {length}
+               - 目标语言 (Language): {language}
+
+               请直接输出 JSON 结果。
+               """
+
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", system_prompt),
+            ("user", user_prompt)
+        ])
+        self.model.temperature = 0.7
+        chain = prompt | self.model | self.output_parser
+        post = "生成回复草稿（支持指定语气、长度、语言）"
+        response = chain.invoke({
+            "sender": parsed_data["from"],
+            "date": parsed_data["date"],
+            "subject": parsed_data["subject"],
+            "body": parsed_data["body"],
+            "attachments": None,
+            "user_instruction": post,
+            "tone": require["tone"],
+            "language": require["language"],
+            "length": require["length"],
+        })
+        return response
+
+    def classifier_agent(self, parsed_data: dict) -> dict:
+        """分类邮件并判断紧急程度"""
+
+        system_prompt = """你是一个专业的智能邮件分拣助手。你的核心任务是阅读用户的电子邮件，并评估该邮件的“紧急程度（Priority）”，同时简要说明判断理由。
+
+        # 紧急程度分类标准 (PRIORITY LEVELS)
+        请严格在以下四个级别中选择其一：
+        1. "High" (高优先级)：
+           - 包含明确的紧急截止日期（如：今天内、尽快、ASAP）。
+           - 重要的系统故障、安全警告或异常通知。
+           - 核心客户或关键业务伙伴的紧急请求。
+           - 上级领导指派的紧急任务。
+        2. "Medium" (中优先级)：
+           - 日常工作沟通、任务安排或进度汇报（无马上到期的截止时间）。
+           - 几天后才需要处理的会议邀请。
+           - 正常的服务咨询或业务问询。
+        3. "Low" (低优先级)：
+           - 行业资讯、内部通讯、Newsletter（订阅邮件）。
+           - 抄送（CC）给你仅作知悉，无需你采取行动的邮件。
+           - 自动生成的常规报表或系统日志。
+        4. "Spam" (垃圾/无效邮件)：
+           - 明显的推销、广告、网络钓鱼或完全无关的内容。
+
+        # 输出要求 (OUTPUT FORMAT)
+        你必须且只能输出合法的 JSON 格式。不要包含任何 Markdown 标记（如 ```json ），也不要包含任何额外的解释性文字。
+
+        期望的 JSON 结构如下：
+        {
+            "priority": "High / Medium / Low / Spam",
+            "reason": "用一句话（20字以内）简要解释为什么判定为这个优先级"
+        }
+        """
+
+        user_prompt = """请分析以下邮件并输出 JSON 格式的优先级评估：
+
+        <email_metadata>
+            发件人: {sender}
+            时间: {date}
+            主题: {subject}
+        </email_metadata>
+
+        <email_body>
+            {body}  
+        </email_body>
+        """
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", system_prompt),
+            ("user", user_prompt)
+        ])
+        self.model.temperature = 0.1
+        chain = prompt | self.model | self.output_parser
+        post = "判断优先级，并且用一句话（20字以内）简要解释为什么判定为这个优先级"
+        response = _summarizer_agent_invoke(chain, parsed_data, None, post)
+        return response
+
+    def task_extractor_agent(self, parsed_data: dict) -> dict:
         """提取待办事项、截止日期、负责人、会议信息"""
-        pass
 
-    def classifier_agent(self):
-        """分类邮件"""
-        pass
+        system_prompt = """你是一个专业的邮件信息提取助手。你的核心任务是从邮件内容中精准提取出“待办事项（Action Items）”和“会议安排（Meetings）”。
+
+                # 提取规则 (EXTRACTION RULES)
+                1. 待办事项 (Tasks):
+                   - action: 具体的任务内容。
+                   - assignee: 任务的负责人（如果邮件中未明确指出，请填 "未明确" 或发件人/收件人名字）。
+                   - deadline: 截止时间（如果没有提到时间，请填 "无"）。
+                2. 会议信息 (Meetings):
+                   - topic: 会议主题或目的。
+                   - time: 会议时间（尽量提取具体的日期和时刻）。
+                   - location: 会议地点（如实体会议室、Zoom/Teams 链接，或填 "未明确"）。
+                3. 绝不捏造 (No Hallucinations): 仅提取邮件中明确提及的信息。如果邮件中既没有待办事项也没有会议安排，请返回空列表 []。
+
+                # 输出要求 (OUTPUT FORMAT)
+                你必须且只能输出合法的 JSON 格式。不要包含任何 Markdown 标记（如 ```json ），也不要包含任何额外的解释性文字。
+
+                期望的 JSON 结构如下：
+                {
+                    "tasks": [
+                        {
+                            "action": "完成项目架构设计文档",
+                            "assignee": "张三",
+                            "deadline": "下周二下班前"
+                        }
+                    ],
+                    "meetings": [
+                        {
+                            "topic": "Q3 季度进度同步会",
+                            "time": "2023-11-05 下午 2:00",
+                            "location": "2号会议室 / 腾讯会议链接"
+                        }
+                    ]
+                }
+                """
+
+        user_prompt = """请分析以下邮件，提取待办事项和会议信息，并输出指定的 JSON 格式：
+
+                <email_metadata>
+                    发件人: {sender}
+                    时间: {date}
+                    主题: {subject}
+                </email_metadata>
+
+                <email_body>
+                    {body}  
+                </email_body>
+                """
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", system_prompt),
+            ("user", user_prompt)
+        ])
+        self.model.temperature = 0.1
+        chain = prompt | self.model | self.output_parser
+        post = "提取待办事项、截止日期、负责人、会议信息"
+        response = _summarizer_agent_invoke(chain, parsed_data, None, post)
+        return response

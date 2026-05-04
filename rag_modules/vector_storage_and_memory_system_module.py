@@ -1,11 +1,28 @@
 import logging
 
+from langchain_openai import OpenAIEmbeddings
+from pydantic import SecretStr
 from pymilvus import FieldSchema, DataType, CollectionSchema
 
+from config import SmartEmailAgentConfig
 from rag_modules import EmailAccessAndSynchronizationModule
 from rag_modules import MilvusConnectionModule
 from rag_modules import AiAnalysisCoreModule
 
+def _embedding_original(text_data: str) -> list[float]:
+    try:
+        embeddings_model = OpenAIEmbeddings(
+            model=SmartEmailAgentConfig.embeddings_model_name,
+            dimensions=SmartEmailAgentConfig.embeddings_dimension,
+            base_url=SmartEmailAgentConfig.embeddings_url,
+            api_key=SecretStr(SmartEmailAgentConfig.embeddings_api_key)
+        )
+        vector = embeddings_model.embed_query(text_data)
+        return vector
+
+    except Exception as e:
+        logging.error(f"数据向量化(Embedding)失败: {e}")
+        return []
 
 def _create_collection(milvus_connection, email_collection):
     """创建milvus的邮箱数据集合"""
@@ -19,6 +36,8 @@ def _create_collection(milvus_connection, email_collection):
         FieldSchema(name="date", dtype=DataType.VARCHAR, max_length=128),
         FieldSchema(name="body", dtype=DataType.VARCHAR, max_length=65535),
         FieldSchema(name="attachments", dtype=DataType.JSON),
+        FieldSchema(name="priority", dtype=DataType.VARCHAR, max_length=256),
+        FieldSchema(name="reason", dtype=DataType.VARCHAR, max_length=256),
         FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=512)
     ]
     schema = CollectionSchema(
@@ -40,16 +59,16 @@ def _create_collection(milvus_connection, email_collection):
 class VectorStorageAndMemorySystemModule:
 
     def __init__(self):
-        pass
+        self.ai_analyzer = None
+        self.milvus_connection = MilvusConnectionModule().connection()
 
     def store_historical_emails(self):
-        milvus_connection_module = MilvusConnectionModule()
-        milvus_connection = milvus_connection_module.connection()
+        self.ai_analyzer = AiAnalysisCoreModule()
         email_collection = "email_collection"
-        if milvus_connection.has_collection(email_collection):
+        if self.milvus_connection.has_collection(email_collection):
             pass
         else:
-            _create_collection(milvus_connection, email_collection)
+            _create_collection(self.milvus_connection, email_collection)
         email_access_and_synchronization_module = EmailAccessAndSynchronizationModule()
         try:
             email_access_and_synchronization_module.authenticate()
@@ -64,16 +83,19 @@ class VectorStorageAndMemorySystemModule:
                 'id': msg_id,
                 'threadId': msg.get('threadId'),
                 'snippet': msg.get('snippet'),
-
                 'subject': parsed_data.get('subject', ''),
                 'from': parsed_data.get('from', ''),
                 'date': parsed_data.get('date', ''),
                 'body': parsed_data.get('body', ''),
                 'attachments': parsed_data.get('attachments', []),
-
-                'embedding': None,
+                'reason' : None,
+                'priority' : None,
+                'embedding' : None,
             }
-            email_data.update(
-                parsed_data.get('embedding', AiAnalysisCoreModule.summarizer_agent())
-            )
-            milvus_connection.insert_one(email_data)
+            embedding_original = AiAnalysisCoreModule.summarizer_agent(self.ai_analyzer, email_data)
+            embedding_final = _embedding_original(embedding_original)
+            email_data['embedding'] = embedding_final
+            class_and_reason = AiAnalysisCoreModule.classifier_agent(self.ai_analyzer, email_data)
+            email_data['priority'] = class_and_reason.get("priority", "Low")
+            email_data['reason'] = class_and_reason.get("reason", "未提供理由")
+            self.milvus_connection.insert_one(email_data)
