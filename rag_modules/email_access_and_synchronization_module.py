@@ -83,7 +83,7 @@ class EmailAccessAndSynchronizationModule:
                 'from': '',
                 'date': '',
                 'body': '',
-                'attachments': []
+                'attachments': {}
             }
             # 1. 遍历并解析邮件头 (Headers)
             # headers 包含了邮件的元数据，如发件人、收件人、主题、时间等

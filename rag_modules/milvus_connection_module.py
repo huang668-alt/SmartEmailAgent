@@ -2,6 +2,9 @@ import logging
 
 from pymilvus import MilvusClient
 
+from config import SmartEmailAgentConfig
+
+
 class MilvusConnectionModule:
 
     def __init__(self):
@@ -9,9 +12,10 @@ class MilvusConnectionModule:
 
     def connection(self):
         """创建milvus的连接"""
+
         try:
             self.service = MilvusClient(
-                uri="http://localhost:19530",
+                uri = SmartEmailAgentConfig.milvus_url,
                 # token="root:Milvus"
             )
         except Exception as e:
@@ -19,6 +23,7 @@ class MilvusConnectionModule:
 
     def close(self):
         """关闭milvus的连接"""
+
         try:
             self.service.close()
         except Exception as e:
