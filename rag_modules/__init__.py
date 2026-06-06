@@ -15,10 +15,11 @@ from .agents import (
     BaseAgent, AgentState, AgentResult,
     SummarizerAgent, ClassifierAgent, ReplyAgent,
     TaskExtractorAgent, ContextSummaryAgent, OrchestratorAgent,
+    QueryAgent,
 )
 
 # Agent 消息总线
-from .bus import MessageBus, AgentMessage, AgentContext
+from .bus import MessageBus, AgentMessage, AgentContext, MessageRole
 
 __all__ = [
     # 基础设施
@@ -33,6 +34,7 @@ __all__ = [
     "BaseAgent", "AgentState", "AgentResult",
     "SummarizerAgent", "ClassifierAgent", "ReplyAgent",
     "TaskExtractorAgent", "ContextSummaryAgent", "OrchestratorAgent",
+    "QueryAgent",
     # 消息总线
-    "MessageBus", "AgentMessage", "AgentContext",
+    "MessageBus", "AgentMessage", "AgentContext", "MessageRole",
 ]

@@ -5,6 +5,7 @@ from .reply_agent import ReplyAgent
 from .task_extractor_agent import TaskExtractorAgent
 from .context_summary_agent import ContextSummaryAgent
 from .orchestrator_agent import OrchestratorAgent
+from .query_agent import QueryAgent
 
 __all__ = [
     "BaseAgent",
@@ -16,4 +17,5 @@ __all__ = [
     "TaskExtractorAgent",
     "ContextSummaryAgent",
     "OrchestratorAgent",
+    "QueryAgent",
 ]

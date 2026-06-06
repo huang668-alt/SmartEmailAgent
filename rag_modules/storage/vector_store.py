@@ -104,3 +104,12 @@ class VectorStore:
             output_fields=["content", "timestamp"],
         )
         return results[0] if results else []
+
+    def search_sent(self, query_vector: list[float], top_k: int = 5) -> list[dict]:
+        """语义搜索发件箱（用于分析用户自己的邮件习惯）"""
+        results = self.client.search(
+            collection_name=COLLECTION_SENT,
+            data=[query_vector], limit=top_k,
+            output_fields=["subject", "to_address", "date", "body"],
+        )
+        return results[0] if results else []

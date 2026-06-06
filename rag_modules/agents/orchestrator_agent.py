@@ -25,37 +25,77 @@ from .classifier_agent import ClassifierAgent
 from .reply_agent import ReplyAgent
 from .task_extractor_agent import TaskExtractorAgent
 from .context_summary_agent import ContextSummaryAgent
+from .query_agent import QueryAgent
 
 logger = logging.getLogger(__name__)
 
 # ── Orchestrator 自身的 System Prompt（用于任务分解） ────────
 
-ORCHESTRATOR_SYSTEM_PROMPT = """你是一个多 Agent 系统的编排器。你管理以下专业 Agent：
+ORCHESTRATOR_SYSTEM_PROMPT = """你是一个多 Agent 系统的编排器，也是用户唯一的入口。你管理以下专业 Agent：
 
-1. **SummarizerAgent** — 邮件摘要（3-5句 + Action Items）
-2. **ClassifierAgent** — 邮件优先级分类（High/Medium/Low/Spam）
-3. **ReplyAgent** — 起草邮件回复（支持指定语气/长度/语言）
-4. **TaskExtractorAgent** — 提取待办事项和会议信息
-5. **ContextSummaryAgent** — 压缩上下文为长期记忆
+1. **QueryAgent** — RAG 问答：从向量库中语义搜索邮件，基于邮件内容回答用户问题
+2. **SummarizerAgent** — 邮件摘要（3-5句 + Action Items）
+3. **ClassifierAgent** — 邮件优先级分类（High/Medium/Low/Spam）
+4. **ReplyAgent** — 起草邮件回复（支持指定语气/长度/语言）
+5. **TaskExtractorAgent** — 提取待办事项和会议信息
+6. **ContextSummaryAgent** — 压缩上下文为长期记忆
 
-你的职责：根据用户目标，输出一个 JSON 执行计划。
+你的首要职责：**判断用户意图，选择正确的执行路径**。
+
+# 路由规则（非常重要）
+
+## 路径A：查询/问答类 → 只用 QueryAgent
+用户的意图是"问一个问题"、"查信息"、"了解情况"时，只返回 QueryAgent。
+关键词：有没有、是什么、怎么样、什么时候、谁发的、最近、进展、总结一下、帮我看看
+示例：
+- "我有没有什么紧急邮件"         → [QueryAgent]
+- "张三最近发了什么"              → [QueryAgent]
+- "Q3项目进展如何"                → [QueryAgent]
+- "服务器宕机的事情谁在处理"       → [QueryAgent]
+- "帮我总结一下最近的邮件"         → [QueryAgent]
+
+## 路径B：处理/操作类 → 用处理 Agent（Summarizer + Classifier + TaskExtractor）
+用户的意图是"对邮件执行操作"时，使用处理类 Agent。需要先有邮件数据。
+关键词：处理、分析、分类、提取、批量、收件箱
+示例：
+- "处理今天的收件箱"              → [SummarizerAgent, ClassifierAgent, TaskExtractorAgent]
+- "分析这批邮件的优先级"           → [SummarizerAgent, ClassifierAgent]
+
+## 路径C：回复类 → SummarizerAgent → ReplyAgent
+用户明确要回复某封邮件时。
+关键词：回复、回信、答复、起草
+示例：
+- "帮我回复张三那封邮件"          → [SummarizerAgent, ReplyAgent]
+
+## 路径D：记忆类 → ContextSummaryAgent
+用户要保存或压缩上下文时。
+关键词：记住、保存、压缩、存档、记忆
+示例：
+- "把这个项目背景记住"            → [ContextSummaryAgent]
+
+## 路径E：混合类 → QueryAgent + 其他
+用户既要查又要操作时。
+示例：
+- "看看有没有重要的，有的话帮我回复" → QueryAgent 先查 → 找到后路由到 ReplyAgent
 
 # 输出格式
-{
+{{
     "goal": "用户目标的一句话总结",
+    "route": "query | process | reply | memory | mixed",
     "steps": [
-        {
+        {{
             "agent": "Agent名称",
             "action": "描述该步要做什么",
-            "depends_on": null 或 [依赖的步骤索引],
+            "depends_on": [],
             "input_from": "从哪里取输入数据"
-        }
+        }}
     ]
-}
+}}
 
 # 规则
-- 步骤必须使用上述 5 个 Agent 之一
-- 如果步骤之间无依赖，可以标记为并行执行
+- **查询类问题只用 QueryAgent，不要加处理 Agent**
+- 步骤必须使用上述 6 个 Agent 之一
+- 如果步骤之间无依赖，标记为并行执行
 - 保持计划简洁，不超过 5 步"""
 
 ORCHESTRATOR_USER_PROMPT = """用户目标：{goal}
@@ -102,6 +142,7 @@ class OrchestratorAgent(BaseAgent):
         # 键：Agent 的注册名称（用于后续路由查找）
         # 值：对应 Agent 类的实例（即刻创建，完成各自初始化）
         defaults = {
+            "QueryAgent": QueryAgent(),  # RAG 问答专家实例
             "SummarizerAgent": SummarizerAgent(),  # 邮件摘要专家实例
             "ClassifierAgent": ClassifierAgent(),  # 邮件优先级分类专家实例
             "ReplyAgent": ReplyAgent(),  # 邮件回复起草专家实例
@@ -234,8 +275,15 @@ class OrchestratorAgent(BaseAgent):
         # 统一转小写，使关键词匹配不区分大小写
         goal_lower = goal.lower()
 
+        # 查询类关键词 → 纯 RAG 问答
+        _query_kw = ("有没有", "是什么", "怎么样", "什么时候", "谁发的", "最近",
+                     "进展", "总结一下", "帮我看看", "有没有什么", "怎么", "哪些", "哪个")
+        if any(kw in goal_lower for kw in _query_kw):
+            return [
+                {"agent": "QueryAgent", "action": "语义检索并回答问题", "depends_on": []},
+            ]
+
         # 场景一：包含"回复"相关关键词 → 先摘要、再起草回复
-        # depends_on: [0] 表示 ReplyAgent 须等 SummarizerAgent（步骤 0）完成后才能执行
         if "回复" in goal_lower or "reply" in goal_lower:
             return [
                 {"agent": "SummarizerAgent", "action": "总结邮件", "depends_on": []},
@@ -248,10 +296,7 @@ class OrchestratorAgent(BaseAgent):
                 {"agent": "ContextSummaryAgent", "action": "压缩上下文", "depends_on": []},
             ]
 
-        # 默认场景：通用邮件处理，三个 Agent 并行执行（depends_on 均为空）
-        # - SummarizerAgent:    生成邮件摘要
-        # - ClassifierAgent:    判断优先级（紧急 / 普通 / 低优先级等）
-        # - TaskExtractorAgent: 从邮件正文中提取待办事项
+        # 默认场景：通用邮件处理，三个 Agent 并行执行
         return [
             {"agent": "SummarizerAgent", "action": "总结邮件", "depends_on": []},
             {"agent": "ClassifierAgent", "action": "分类优先级", "depends_on": []},
