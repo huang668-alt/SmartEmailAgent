@@ -264,11 +264,45 @@ class BaseAgent(ABC):
         return prompt | self.llm | self.output_parser
 
     def _invoke_chain(self, chain, variables: Dict[str, Any]) -> str:
-        """安全地调用 LLM 链"""
+        """安全地调用 LLM 链（非流式）"""
         try:
             return chain.invoke(variables)
         except Exception as e:
             logger.error(f"Agent [{self.name}] LLM 调用失败: {e}")
+            raise
+
+    from typing import Dict, Any, Generator
+
+    def _stream_chain(self, chain, variables: Dict[str, Any]) -> Generator[str, None, None]:
+        """
+        内部辅助方法：流式调用 LLM 链并安全地透传生成的文本片段。
+
+        核心原理:
+            利用 LangChain 的 .stream() 方法，将模型生成的 Response 拆分为多个
+            Chunk（片段）。本方法充当“中转站”，在迭代过程中捕获可能发生的网络或模型错误。
+
+        参数:
+            chain: 已构建好的 LangChain 运行链 (Runnable) 对象。
+            variables (Dict[str, Any]): 注入提示词模板的变量字典，例如 {"context": "...", "question": "..."}。
+
+        Yields:
+            str: 从 LLM 实时产出的字符串片段。
+
+        Raises:
+            Exception: 当模型调用失败或网络连接中断时，记录日志并向上层重新抛出异常，
+                      以便上层 stream 方法能向用户展示具体的报错提示。
+        """
+        try:
+            # 使用 LangChain 的流式接口，逐个获取生成的文本块
+            for chunk in chain.stream(variables):
+                # 这里根据 Chain 的类型不同，chunk 可能已经是字符串，也可能是包含了 content 的对象
+                # 这种直接 yield 的方式要求 chain 的输出类型已在构建时处理为字符串 (StrOutputParser)
+                yield chunk
+
+        except Exception as e:
+            # 记录详细的错误日志，包含 Agent 的名称以便在多智能体环境下定位问题
+            logger.error(f"Agent [{self.name}] 流式调用 LLM 链路时发生异常: {e}")
+            # 将异常继续抛出，确保上层业务逻辑能感知到“流中断”
             raise
 
     # ── 核心接口 ───────────────────────────────────────────

@@ -64,16 +64,24 @@ class EmailParser:
 
         # 2. 解析 multipart 结构
         payload = msg["payload"]
+        html_body = ""  # HTML 兜底
+
         if "parts" in payload:
             for part in payload["parts"]:
                 mime = part.get("mimeType", "")
                 filename = part.get("filename")
 
-                # 纯文本正文
+                # 纯文本正文（优先）
                 if mime == "text/plain" and not filename:
                     data = part["body"].get("data", "")
                     if data:
                         email_data["body"] = self._decode_base64(data)
+
+                # HTML 正文（兜底）
+                elif mime == "text/html" and not filename:
+                    data = part["body"].get("data", "")
+                    if data:
+                        html_body = self._decode_base64(data)
 
                 # 附件
                 elif filename:
@@ -85,6 +93,10 @@ class EmailParser:
             data = payload["body"].get("data", "")
             if data:
                 email_data["body"] = self._decode_base64(data)
+
+        # 如果没有纯文本正文，从 HTML 中提取文本
+        if not email_data["body"] and html_body:
+            email_data["body"] = self._strip_html(html_body)
 
         return email_data
 
@@ -155,3 +167,17 @@ class EmailParser:
             return base64.urlsafe_b64decode(data).decode("utf-8")
         except Exception:
             return ""
+
+    @staticmethod
+    def _strip_html(html: str) -> str:
+        """去除 HTML 标签，提取纯文本"""
+        import re
+        # 移除非断空格 &nbsp;
+        text = html.replace("&nbsp;", " ").replace("&amp;", "&")
+        text = text.replace("&lt;", "<").replace("&gt;", ">")
+        text = text.replace("&quot;", '"').replace("&#39;", "'")
+        # 移除所有 HTML 标签
+        text = re.sub(r"<[^>]+>", "", text)
+        # 合并连续空白
+        text = re.sub(r"\s+", " ", text).strip()
+        return text

@@ -20,7 +20,6 @@ def _add_vector_index(client: MilvusClient, params: dict):
     )
     return index_params
 
-
 def create_inbox_collection(client: MilvusClient, name: str = "accept_email_collection"):
     """收件箱邮件集合"""
     if client.has_collection(name):
@@ -65,7 +64,6 @@ def create_sent_collection(client: MilvusClient, name: str = "send_email_collect
     client.create_collection(collection_name=name, schema=schema,
                              index_params=_add_vector_index(client, HNSW_PARAMS_LIGHT))
     logger.info(f"集合 {name} 创建成功")
-
 
 def create_context_collection(client: MilvusClient, name: str = "context_historical"):
     """长期记忆集合"""

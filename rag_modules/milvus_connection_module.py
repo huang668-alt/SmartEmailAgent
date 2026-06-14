@@ -11,7 +11,6 @@ class MilvusConnectionModule:
 
     def connection(self):
         """创建milvus的连接"""
-
         try:
             self.service = MilvusClient(
                 uri = SmartEmailAgentConfig.milvus_url,
@@ -22,7 +21,6 @@ class MilvusConnectionModule:
 
     def close(self):
         """关闭milvus的连接"""
-
         try:
             self.service.close()
         except Exception as e:

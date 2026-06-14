@@ -59,6 +59,10 @@ class SmartEmailAgentConfig:
     top_k: int = 5
     number_of_common_contacts: int = 5
 
+    # ── API 服务 ───────────────────────────────────────────
+    api_host: str = "0.0.0.0"
+    api_port: int = 8000
+
     def __post_init__(self):
         """初始化后的处理（预留）"""
         pass
@@ -83,13 +87,19 @@ _env_map = {
     "summarizer_agent_module_base_url":  ("SMART_EMAIL_LLM_BASE_URL", "https://api.openai.com/v1"),
     "summarizer_agent_module_api_key":   ("SMART_EMAIL_LLM_API_KEY", ""),
     "embeddings_model_name":             ("SMART_EMAIL_EMBED_MODEL", "text-embedding-3-small"),
-    "embeddings_api_key":                ("SMART_EMAIL_EMBED_API_KEY", ""),
+    "number_of_common_contacts":          ("SMART_EMAIL_COMMON_CONTACTS", "5"),
+    "api_host":                            ("SMART_EMAIL_HOST", "0.0.0.0"),
+    "api_port":                            ("SMART_EMAIL_PORT", "8000"),
 }
 
 for _field, (_env_key, _default) in _env_map.items():
     _value = _env(_env_key, _default)
     if _value:
-        setattr(SmartEmailAgentConfig, _field, _value)
+        # api_port 是 int 类型，需要转换
+        if _field == "api_port":
+            setattr(SmartEmailAgentConfig, _field, int(_value))
+        else:
+            setattr(SmartEmailAgentConfig, _field, _value)
 
 # Embedding URL 特殊处理：如果没单独配，就用 LLM 的 URL
 _embed_url = _env("SMART_EMAIL_EMBED_BASE_URL")
@@ -104,5 +114,4 @@ if not _embed_key:
 setattr(SmartEmailAgentConfig, "embeddings_api_key", _embed_key)
 
 # ── 模块级默认实例 ──────────────────────────────────────────
-
 DEFAULT_CONFIG = SmartEmailAgentConfig()

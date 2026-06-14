@@ -9,7 +9,7 @@
 
 import json
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Generator
 
 from .base import BaseAgent, AgentResult
 
@@ -125,3 +125,51 @@ class ReplyAgent(BaseAgent):
             )
         except Exception as e:
             return AgentResult(success=False, error=str(e))
+
+    def stream(self, input_data: Dict[str, Any]) -> Generator[str, None, None]:
+        """
+        流式起草邮件回复，逐 token 产出 JSON 文本。
+
+        参数:
+            input_data: 包含 instruction（回复意图）、tone_reference（语气参考）、
+                       history（历史对话）的字典。
+
+        Yields:
+            str: 模型生成的文本片段（最终可解析为 JSON）。
+        """
+        instruction = input_data.get("instruction", "")
+        tone_reference = input_data.get("tone_reference", "")
+        history = input_data.get("history", [])
+
+        if not instruction:
+            yield "（错误：缺少回复指令）"
+            return
+
+        # 构建流式起草的提示词
+        STREAM_REPLY_TEMPLATE = """请根据以下信息起草回信：
+
+【起草指令】
+{instruction}
+
+【发件箱语气参考（用于模仿用户的写作风格）】
+{tone_reference}
+
+{history_hint}
+
+请直接输出 JSON 格式的回复邮件，结构为：
+{{"subject": "Re: ...", "body": "邮件正文内容..."}}"""
+
+        history_hint = ""
+        if history:
+            recent = history[-3:]
+            history_hint = "【对话历史】\n" + "\n".join(
+                f"用户: {h.get('user', h.get('question', ''))}" for h in recent
+            )
+
+        chain = self._build_chain(STREAM_REPLY_TEMPLATE)
+        for chunk in self._stream_chain(chain, {
+            "instruction": instruction,
+            "tone_reference": tone_reference or "（无参考数据）",
+            "history_hint": history_hint,
+        }):
+            yield chunk

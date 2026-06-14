@@ -19,6 +19,9 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional
 
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+
 from .base import BaseAgent, AgentResult, AgentState
 from .summarizer_agent import SummarizerAgent
 from .classifier_agent import ClassifierAgent
@@ -545,6 +548,47 @@ class OrchestratorAgent(BaseAgent):
             ],
             "context": raw_text,
         })
+
+    # ── 意图路由 ────────────────────────────────────────────
+
+    INTENT_ROUTING_PROMPT = """你是一个意图路由器。分析用户输入，返回单一意图标签。
+
+# 意图标签（严格四选一）
+- QUERY: 用户在提问、查询信息、了解情况。例如："有没有紧急邮件"、"张三发了什么"、"最近进展如何"
+- STORE: 用户要保存/记住/存储信息。例如："记住这个项目背景"、"把这个存下来"
+- REPLY: 用户要回复/起草邮件。例如："帮我回复张三"、"起草一封回信"
+- PURE_CHAT: 闲聊、问候、与邮件系统无关的对话。例如："你好"、"今天天气怎么样"
+
+# 输出格式
+只输出一个单词：QUERY / STORE / REPLY / PURE_CHAT，不要加任何标点或解释。"""
+
+    def predict(self, user_input: str, history: list = None) -> str:
+        """
+        快速意图分类，用于 chat_stream 路由。
+
+        Args:
+            user_input: 用户输入的自然语言
+            history: 对话历史（当前仅用于上下文，不影响路由逻辑）
+
+        Returns:
+            str: 意图标签 — "QUERY" | "STORE" | "REPLY" | "PURE_CHAT"
+        """
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", self.INTENT_ROUTING_PROMPT),
+            ("user", "{input}"),
+        ])
+        chain = prompt | self.llm | StrOutputParser()
+        try:
+            result = chain.invoke({"input": user_input})
+            intent = result.strip().upper()
+            # 白名单校验：如果 LLM 返回了非法标签，降级为 PURE_CHAT
+            if intent not in ("QUERY", "STORE", "REPLY", "PURE_CHAT"):
+                logger.warning(f"路由返回非法意图 [{intent}]，降级为 PURE_CHAT")
+                return "PURE_CHAT"
+            return intent
+        except Exception as e:
+            logger.warning(f"意图路由 LLM 调用失败: {e}，降级为 PURE_CHAT")
+            return "PURE_CHAT"
 
     def reset(self) -> None:
         """重置编排器和所有子 Agent"""

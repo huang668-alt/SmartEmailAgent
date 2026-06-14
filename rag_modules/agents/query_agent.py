@@ -7,10 +7,8 @@ RAG 问答 Agent
 - 支持多轮对话历史
 - 输出结构化回答 + 来源引用
 """
-
-import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from .base import BaseAgent, AgentResult
 
@@ -68,7 +66,6 @@ USER_PROMPT_TEMPLATE = """请根据以下检索到的相关邮件和上下文，
 
 请按系统提示的格式组织你的回答。"""
 
-
 class QueryAgent(BaseAgent):
     """
     RAG 问答 Agent
@@ -94,15 +91,59 @@ class QueryAgent(BaseAgent):
         )
 
     def _format_history(self, history: List[Dict[str, str]]) -> str:
-        """将对话历史格式化为文本"""
+        """
+        将对话历史格式化为文本
+
+        支持两种格式：
+        1. 对话格式: [{"question": "...", "answer": "..."}]
+        2. mem0 历史格式: [{"event": "ADD", "old_memory": "...", "new_memory": "..."}]
+        """
         if not history:
-            return "（无历史对话）"
+            return "（无历史记录）"
 
         lines = []
-        for i, turn in enumerate(history[-6:], start=1):  # 最近 3 轮
-            lines.append(f"Q{i}: {turn.get('question', '')}")
-            lines.append(f"A{i}: {turn.get('answer', '')[:200]}")  # 截断旧回答
-        return "\n".join(lines)
+
+        # 判断是哪种格式
+        if history and "event" in history[0]:
+            # mem0 记忆变更历史
+            lines.append("## 记忆变更历史\n")
+            for i, event in enumerate(history, start=1):
+                event_type = event.get("event", "未知")
+                timestamp = event.get("timestamp", "")
+
+                if event_type == "ADD":
+                    lines.append(f"{i}. [新增] {event.get('new_memory', '')}")
+                elif event_type == "UPDATE":
+                    lines.append(f"{i}. [更新] {event.get('old_memory', '')} → {event.get('new_memory', '')}")
+                elif event_type == "DELETE":
+                    lines.append(f"{i}. [删除] {event.get('old_memory', '')}")
+
+                if timestamp:
+                    lines[-1] += f" ({timestamp})"
+
+        elif history and "question" in history[0]:
+            # 对话历史
+            recent = history[-6:]  # 最近3轮（每轮包含question和answer）
+            for i, turn in enumerate(recent, start=1):
+                question = turn.get('question', '')
+                answer = turn.get('answer', '')
+
+                lines.append(f"Q{i}: {question}")
+
+                # 截断过长的回答
+                if answer and len(answer) > 200:
+                    answer = answer[:200] + "..."
+                lines.append(f"A{i}: {answer or '(无回答)'}")
+
+        else:
+            # 未知格式，尝试通用处理
+            for i, item in enumerate(history[-6:], start=1):
+                if isinstance(item, dict):
+                    # 取第一个有意义的字段
+                    content = item.get('content') or item.get('text') or str(item)
+                    lines.append(f"{i}. {content[:200]}")
+
+        return "\n".join(lines) if lines else "（无历史记录）"
 
     def execute(self, input_data: Dict[str, Any]) -> AgentResult:
         """基于检索上下文回答用户问题"""
@@ -150,3 +191,48 @@ class QueryAgent(BaseAgent):
             )
         except Exception as e:
             return AgentResult(success=False, error=str(e))
+
+    from typing import Dict, Any, Generator
+
+    def stream(self, input_data: Dict[str, Any]) -> Generator[str, None, None]:
+        """
+        流式执行 RAG (检索增强生成) 问答，逐 token 产出大模型生成的文本。
+
+        参数:
+            input_data (Dict[str, Any]): 输入的数据字典，包含问题、上下文和历史对话。
+                - "question" (str): 用户当前提问。
+                - "context" (str): 检索出来的相关邮件上下文。
+                - "history" (List[Dict]): 历史对话轮次。
+
+        Yields:
+            str: 大模型生成的文本片段 (Chunk/Token)
+        """
+        # 1. 解析输入数据，设置默认值防止 Key 缺失报错
+        question = input_data.get("question", "")
+        context = input_data.get("context", "")
+        history = input_data.get("history", [])
+
+        # 2. 前置边界校验：检查核心参数是否为空
+        if not question:
+            yield "（错误：缺少问题输入）"
+            return
+
+        # 3. 业务逻辑校验：如果上下文为空（未检索到或未同步邮件），进行友好提示
+        if not context:
+            yield "当前没有任何邮件数据。请先同步收件箱后再提问。"
+            return
+
+        # 4. 初始化 LangChain 或者是自定义的执行链 (Chain)
+        # USER_PROMPT_TEMPLATE 是预定义的提示词模板
+        chain = self._build_chain(USER_PROMPT_TEMPLATE)
+
+        # 5. 格式化变量并流式调用大模型
+        # _format_history: 将历史对话格式化为模型可接受的结构 (如字符串或消息对象)
+        # _stream_chain: 负责调用模型并返回一个可迭代的生成器 (Generator)
+        for chunk in self._stream_chain(chain, {
+            "history": self._format_history(history),
+            "context": context,
+            "question": question,
+        }):
+            # 6. 逐个 token/片段实时向前端(或调用方)推送数据
+            yield chunk
